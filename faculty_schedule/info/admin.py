@@ -1,10 +1,33 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Teacher, Groups, Classroom, Schedule
-from django.contrib.auth.models import Group, User
+from .models import Teacher, Groups, Classroom, Schedule, Users
+from django.contrib.auth.models import Group
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
 admin.site.unregister(Group)
-admin.site.unregister(User)
+@admin.register(Users)
+class UserAdmin(BaseUserAdmin):
+    model = Users
+    list_display = ("id", "username", "is_staff", "is_active")
+    list_filter = ("is_staff", "is_active")
+
+    # Поля в деталях пользователя
+    fieldsets = (
+        (None, {"fields": ("username", "password")}),
+        ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser")}),
+    )
+
+    # Поля для создания нового пользователя
+    add_fieldsets = (
+        (None, {
+            "classes": ("wide",),
+            "fields": ("username", "password1", "password2", "is_staff", "is_active"),
+        }),
+    )
+
+    search_fields = ("username",)
+    ordering = ("id",)
+
 @admin.register(Teacher)
 class TeacherAdmin(admin.ModelAdmin):
     """Админ-панель для преподавателей"""
@@ -65,7 +88,7 @@ class GroupAdmin(admin.ModelAdmin):
 class ClassroomAdmin(admin.ModelAdmin):
     """Админ-панель для аудиторий"""
 
-    list_display = ['classroom_number', 'classroom_type_badge', 'capacity', 'utilization']
+    list_display = ['classroom_number', 'classroom_type_badge', 'utilization'] #'capacity',
     list_filter = ['classroom_type']
     search_fields = ['classroom_number']
     ordering = ['classroom_number']
@@ -74,9 +97,9 @@ class ClassroomAdmin(admin.ModelAdmin):
         ('Основная информация', {
             'fields': ('classroom_number', 'classroom_type')
         }),
-        ('Характеристики', {
-            'fields': ('capacity',)
-        }),
+        # ('Характеристики', {
+        #     'fields': ('capacity',)
+        # }),
     )
 
     def classroom_type_badge(self, obj):
@@ -96,12 +119,12 @@ class ClassroomAdmin(admin.ModelAdmin):
 
     def utilization(self, obj):
         """Загруженность аудитории"""
-        total_slots = 7 * 11  # 7 дней × 11 временных слотов
+        total_slots = 6 * 11  # 7 дней × 11 временных слотов
         used_slots = obj.schedule_set.count()
         if total_slots > 0:
             percentage = (used_slots / total_slots) * 100
             return f"{used_slots}/{total_slots} ({percentage:.1f}%)"
-        return "0/77 (0%)"
+        return "0/66 (0%)"
 
     utilization.short_description = 'Загруженность'
 
@@ -110,13 +133,15 @@ class ClassroomAdmin(admin.ModelAdmin):
 class ScheduleAdmin(admin.ModelAdmin):
     """Админ-панель для расписания"""
 
+    def get_groups(self, obj):
+        return ", ".join([g.group_name for g in obj.groups.all()])
+
     list_display = [
         'get_day_time',
         'teacher',
-        'group',
-        'classroom',
-        'status_badge'
-    ]
+        'get_groups',
+        'classroom'
+    ] #'status_badge'
     list_filter = [
         'day_of_week',
         'lesson_time',
@@ -125,19 +150,18 @@ class ScheduleAdmin(admin.ModelAdmin):
     ]
     search_fields = [
         'teacher__fullname',
-        'group__group_name',
         'classroom__classroom_number'
     ]
     ordering = ['day_of_week', 'lesson_time']
 
-    autocomplete_fields = ['teacher', 'group', 'classroom']
+    autocomplete_fields = ['teacher', 'groups', 'classroom']
 
     fieldsets = (
         ('Время и место', {
             'fields': ('day_of_week', 'lesson_time', 'classroom')
         }),
         ('Участники', {
-            'fields': ('teacher', 'group')
+            'fields': ('teacher', 'groups')
         }),
     )
 
@@ -151,48 +175,51 @@ class ScheduleAdmin(admin.ModelAdmin):
 
     get_day_time.short_description = 'День и время'
 
-    def status_badge(self, obj):
-        """Статус занятия (совпадение типов)"""
-        teacher_type = obj.teacher.lesson_type
-        classroom_type = obj.classroom.classroom_type
 
-        # Проверяем соответствие типов
-        match = (
-                (teacher_type == 'practical' and classroom_type == 'computer') or
-                (teacher_type == 'lecture' and classroom_type == 'lecture')
-        )
+    # def status_badge(self, obj):
+    #     """Статус занятия (совпадение типов)"""
+    #     teacher_type = obj.teacher.lesson_type
+    #     classroom_type = obj.classroom.classroom_type
 
-        if match:
-            return format_html(
-                '<span style="color: green;">✓ Соответствует</span>'
-            )
-        else:
-            return format_html(
-                '<span style="color: red;">✗ Не соответствует</span>'
-            )
+    #     # Проверяем соответствие типов
+    #     match = (
+    #             (teacher_type == 'practical' and classroom_type == 'computer') or
+    #             (teacher_type == 'lecture' and classroom_type == 'lecture')
+    #     )
+    #
+    #     if match:
+    #         return format_html(
+    #             '<span style="color: green;">✓ Соответствует</span>'
+    #         )
+    #     else:
+    #         return format_html(
+    #             '<span style="color: red;">✗ Не соответствует</span>'
+    #         )
+    #
+    # status_badge.short_description = 'Соответствие типов'
+    #
+    #
+    # def save_model(self, request, obj, form, change):
+    #     """Валидация при сохранении"""
+    #     # Проверяем соответствие типов
+    #     teacher_type = obj.teacher.lesson_type
+    #     classroom_type = obj.classroom.classroom_type
+    #
+    #     type_match = {
+    #         'practical': 'computer',
+    #         'lecture': 'lecture'
+    #     }
+    #
+    #     if type_match.get(teacher_type) != classroom_type:
+    #         from django.contrib import messages
+    #         messages.warning(
+    #             request,
+    #             f'Внимание: Тип занятия преподавателя ({teacher_type}) '
+    #             f'не соответствует типу аудитории ({classroom_type})'
+    #         )
+    #
+    #     super().save_model(request, obj, form, change)
 
-    status_badge.short_description = 'Соответствие типов'
-
-    def save_model(self, request, obj, form, change):
-        """Валидация при сохранении"""
-        # Проверяем соответствие типов
-        teacher_type = obj.teacher.lesson_type
-        classroom_type = obj.classroom.classroom_type
-
-        type_match = {
-            'practical': 'computer',
-            'lecture': 'lecture'
-        }
-
-        if type_match.get(teacher_type) != classroom_type:
-            from django.contrib import messages
-            messages.warning(
-                request,
-                f'Внимание: Тип занятия преподавателя ({teacher_type}) '
-                f'не соответствует типу аудитории ({classroom_type})'
-            )
-
-        super().save_model(request, obj, form, change)
 
 
 # Настройка заголовков админ-панели

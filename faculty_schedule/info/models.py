@@ -1,22 +1,59 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 
+
+class UserManager(BaseUserManager):
+    def create_user(self, username, password=None, **extra_fields):
+        if not username:
+            raise ValueError("Username is required")
+
+        user = self.model(username=username, **extra_fields)
+        user.set_password(password)
+        user.save(using=self.db)
+        return user
+
+    def create_superuser(self, username, password=None, **extra_fields):
+        extra_fields.setdefault("is_staff", True)
+        extra_fields.setdefault("is_superuser", True)
+
+        if not extra_fields["is_staff"]:
+            raise ValueError("Superuser must have is_staff=True.")
+        if not extra_fields["is_superuser"]:
+            raise ValueError("Superuser must have is_superuser=True.")
+
+        return self.create_user(username, password, **extra_fields)
+
+    def get_by_natural_key(self, username):
+        return self.get(username=username)
+
+
+class Users(AbstractBaseUser, PermissionsMixin):
+    username = models.CharField(max_length=100, unique=True)
+
+    is_active = models.BooleanField(default=True)
+    is_staff = models.BooleanField(default=False)
+
+    objects = UserManager()
+
+    USERNAME_FIELD = "username"
+    REQUIRED_FIELDS = []  # при создании суперюзера
+
+    class Meta:
+        db_table = "users"
+        verbose_name = "Users"
+        verbose_name_plural = "Users"
+
+    def __str__(self):
+        return self.username
 
 class Teacher(models.Model):
-
     class LessonType(models.TextChoices):
         PRACTICAL = 'practical', 'Практический'
         LECTURE = 'lecture', 'Лекционный'
 
-    fullname = models.CharField(
-        max_length=100,
-        verbose_name='ФИО преподавателя'
-    )
-    lesson_type = models.CharField(
-        max_length=50,
-        choices=LessonType.choices,
-        verbose_name='Тип занятия'
-    )
+    fullname = models.CharField(max_length=100, verbose_name='ФИО преподавателя')
+    lesson_type = models.CharField(max_length=50, choices=LessonType.choices, verbose_name='Тип занятия')
 
     class Meta:
         verbose_name = 'Преподаватель'
@@ -99,11 +136,11 @@ class Classroom(models.Model):
         choices=ClassroomType.choices,
         verbose_name='Тип аудитории'
     )
-    capacity = models.IntegerField(
-        default=30,
-        validators=[MinValueValidator(1)],
-        verbose_name='Вместимость'
-    )
+    # capacity = models.IntegerField(
+    #     default=30,
+    #     validators=[MinValueValidator(1)],
+    #     verbose_name='Вместимость'
+    # )
 
     class Meta:
         verbose_name = 'Аудитория'
@@ -121,20 +158,23 @@ class Schedule(models.Model):
         on_delete=models.CASCADE,
         verbose_name='Преподаватель'
     )
-    group = models.ForeignKey(
+
+    groups = models.ManyToManyField(
         Groups,
-        on_delete=models.CASCADE,
-        verbose_name='Группа'
+        verbose_name='Группы'
     )
+
     classroom = models.ForeignKey(
         Classroom,
         on_delete=models.CASCADE,
         verbose_name='Аудитория'
     )
+
     day_of_week = models.IntegerField(
         choices=DayofWeek.choices,
         verbose_name='День недели'
     )
+
     lesson_time = models.IntegerField(
         choices=LessonTime.choices,
         verbose_name='Время занятия'
@@ -143,82 +183,65 @@ class Schedule(models.Model):
     class Meta:
         verbose_name = 'Расписание'
         verbose_name_plural = 'Расписание'
-        unique_together = [
-            ['teacher', 'day_of_week', 'lesson_time'],
-            ['group', 'day_of_week', 'lesson_time'],
-            ['classroom', 'day_of_week', 'lesson_time']
-        ]
         ordering = ['day_of_week', 'lesson_time']
 
+        constraints = [
+            models.UniqueConstraint(
+                fields=['classroom', 'day_of_week', 'lesson_time'],
+                name='unique_classroom_slot'
+            )
+        ]
+
     def __str__(self):
-        return (
-            f"{self.group.group_name} - "
-            f"{self.teacher.fullname} - "
-            f"Ауд. {self.classroom.classroom_number} - "
-            f"{self.get_day_of_week_display()} {self.get_lesson_time_display()}"
-        )
+        return f"{self.teacher} — {self.day_of_week} {self.lesson_time}"
+
+
 
 
 def find_free_slots(teacher, group, day_of_week, lesson_time):
     """
     Находит свободные слоты для проведения занятия.
-
-    Args:
-        teacher: объект Teacher
-        group: объект Group
-        day_of_week: день недели (0-6)
-        lesson_time: время занятия (0-10)
-
-    Returns:
-        dict: {
-            'teacher_free': bool,
-            'group_free': bool,
-            'available_classrooms': QuerySet,
-            'can_schedule': bool
-        }
     """
 
-    # Проверяем, свободен ли преподаватель
-    teacher_busy = Schedule.objects.filter(
-        teacher=teacher,
-        day_of_week=day_of_week,
-        lesson_time=lesson_time
-    ).exists()
-
-    # Проверяем, свободна ли группа
+    # --- Проверяем, занята ли группа ---
     group_busy = Schedule.objects.filter(
-        group=group,
+        groups=group,
         day_of_week=day_of_week,
         lesson_time=lesson_time
     ).exists()
 
-    # Получаем занятые аудитории в это время
-    busy_classrooms = Schedule.objects.filter(
-        day_of_week=day_of_week,
-        lesson_time=lesson_time
-    ).values_list('classroom_id', flat=True)
-
-    # Сопоставляем тип занятия преподавателя с типом аудитории
+    # Карта типов аудиторий
     classroom_type_map = {
         'practical': 'computer',
         'lecture': 'lecture'
     }
-
     required_classroom_type = classroom_type_map.get(teacher.lesson_type)
 
-    # Находим свободные аудитории нужного типа
-    available_classrooms = Classroom.objects.filter(
-        classroom_type=required_classroom_type
-    ).exclude(
-        id__in=busy_classrooms
-    )
 
-    return {
-        'teacher_free': not teacher_busy,
-        'group_free': not group_busy,
-        'available_classrooms': available_classrooms,
-        'can_schedule': not teacher_busy and not group_busy and available_classrooms.exists()
-    }
+    # Ищем существующую урок преподавателя в это время
+    teacher_existing = Schedule.objects.filter(
+        teacher=teacher,
+        day_of_week=day_of_week,
+        lesson_time=lesson_time
+    ).first()
+
+    if teacher_existing:
+        # Учитель уже ведёт урок → можно добавить ещё группу в ту же аудиторию
+        available_classrooms = Classroom.objects.filter(id=teacher_existing.classroom_id)
+        teacher_free = True
+
+    else:
+        # Ищем свободные аудитории
+        busy_classrooms = Schedule.objects.filter(
+            day_of_week=day_of_week,
+            lesson_time=lesson_time
+        ).values_list('classroom_id', flat=True)
+
+        available_classrooms = Classroom.objects.filter(
+            classroom_type=required_classroom_type
+        ).exclude(id__in=busy_classrooms)
+
+        teacher_free = True  # Учитель всегда свободен по логике
 
 
 def get_weekly_availability(teacher, group):
