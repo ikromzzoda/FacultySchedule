@@ -54,6 +54,7 @@ class Teacher(models.Model):
 
     fullname = models.CharField(max_length=100, verbose_name='ФИО преподавателя')
     lesson_type = models.CharField(max_length=50, choices=LessonType.choices, verbose_name='Тип занятия')
+    subjects = models.ManyToManyField('Subject', verbose_name='Предметы')
 
     class Meta:
         verbose_name = 'Преподаватель'
@@ -94,6 +95,19 @@ class Groups(models.Model):
 
     def __str__(self):
         return f"{self.group_name} (курс {self.group_course})"
+
+
+class Subject(models.Model):
+    subject_name = models.CharField(max_length=100, verbose_name='Название предмета')
+
+    class Meta:
+        verbose_name = 'Предмет'
+        verbose_name_plural = 'Предметы'
+        ordering = ['subject_name']
+
+    def __str__(self):
+        return self.subject_name
+
 
 
 class DayofWeek(models.IntegerChoices):
@@ -197,12 +211,10 @@ class Schedule(models.Model):
 
 
 
-
 def find_free_slots(teacher, group, day_of_week, lesson_time):
     """
     Находит свободные слоты для проведения занятия.
     """
-
     # --- Проверяем, занята ли группа ---
     group_busy = Schedule.objects.filter(
         groups=group,
@@ -217,8 +229,7 @@ def find_free_slots(teacher, group, day_of_week, lesson_time):
     }
     required_classroom_type = classroom_type_map.get(teacher.lesson_type)
 
-
-    # Ищем существующую урок преподавателя в это время
+    # Ищем существующий урок преподавателя в это время
     teacher_existing = Schedule.objects.filter(
         teacher=teacher,
         day_of_week=day_of_week,
@@ -226,12 +237,11 @@ def find_free_slots(teacher, group, day_of_week, lesson_time):
     ).first()
 
     if teacher_existing:
-        # Учитель уже ведёт урок → можно добавить ещё группу в ту же аудиторию
+        # Учитель уже ведёт урок → можно добавить группу ТОЛЬКО в ту же аудиторию
         available_classrooms = Classroom.objects.filter(id=teacher_existing.classroom_id)
         teacher_free = True
-
     else:
-        # Ищем свободные аудитории
+        # Учитель свободен → ищем свободные аудитории нужного типа
         busy_classrooms = Schedule.objects.filter(
             day_of_week=day_of_week,
             lesson_time=lesson_time
@@ -241,7 +251,18 @@ def find_free_slots(teacher, group, day_of_week, lesson_time):
             classroom_type=required_classroom_type
         ).exclude(id__in=busy_classrooms)
 
-        teacher_free = True  # Учитель всегда свободен по логике
+        teacher_free = True
+
+    group_free = not group_busy
+    can_schedule = teacher_free and group_free and available_classrooms.exists()
+
+    return {
+        'can_schedule': can_schedule,
+        'teacher_free': teacher_free,
+        'group_free': group_free,
+        'available_classrooms': available_classrooms,
+    }
+
 
 
 def get_weekly_availability(teacher, group):

@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from .models import Teacher, Groups, Classroom, Schedule, Users
+from .models import Teacher, Groups, Classroom, Schedule, Users, Subject
 from django.contrib.auth.models import Group
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
@@ -28,14 +28,31 @@ class UserAdmin(BaseUserAdmin):
     search_fields = ("username",)
     ordering = ("id",)
 
+@admin.register(Subject)
+class SubjectAdmin(admin.ModelAdmin):
+    """Админ-панель для предметов"""
+
+    list_display = ['subject_name']
+    search_fields = ['subject_name']
+    ordering = ['subject_name']
+
+
 @admin.register(Teacher)
 class TeacherAdmin(admin.ModelAdmin):
     """Админ-панель для преподавателей"""
 
-    list_display = ['fullname', 'lesson_type_badge', 'schedule_count']
+    list_display = ['fullname', 'lesson_type_badge', 'get_subjects', 'schedule_count']
     list_filter = ['lesson_type']
     search_fields = ['fullname']
     ordering = ['fullname']
+    filter_horizontal = ['subjects'] 
+
+    def get_subjects(self, obj):
+        """Получение списка предметов"""
+        return ", ".join([s.subject_name for s in obj.subjects.all()])
+    
+    get_subjects.short_description = 'Предметы'
+
 
     def lesson_type_badge(self, obj):
         """Цветная метка типа занятия"""
